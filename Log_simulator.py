@@ -35,6 +35,35 @@ def reconnect():
     conn = get_connection()
     cursor = conn.cursor()
 
+
+def ensure_etl_parent(run_id):
+    cursor.execute(
+        """
+        INSERT IGNORE INTO etl_metrics
+        (run_id, source_type, total_rows, inserted_rows, rejected_rows, load_time)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (run_id, "api", 0, 0, 0, datetime.now())
+    )
+    conn.commit()
+
+
+def upsert_etl_metrics(run_id, total_rows, inserted_rows, rejected_rows):
+    cursor.execute(
+        """
+        INSERT INTO etl_metrics
+        (run_id, source_type, total_rows, inserted_rows, rejected_rows, load_time)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            total_rows = VALUES(total_rows),
+            inserted_rows = VALUES(inserted_rows),
+            rejected_rows = VALUES(rejected_rows),
+            load_time = VALUES(load_time)
+        """,
+        (run_id, "api", total_rows, inserted_rows, rejected_rows, datetime.now())
+    )
+    conn.commit()
+
 conn = get_connection()
 cursor = conn.cursor()
 
@@ -44,12 +73,18 @@ cursor = conn.cursor()
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-valid_csv = os.path.join(DATA_DIR, "system_logs.csv")
+raw_csv = os.path.join(DATA_DIR, "log.csv")
+cleaned_csv = os.path.join(DATA_DIR, "cleaned_logs.csv")
 rejected_csv = os.path.join(DATA_DIR, "rejected_logs.csv")
 
 # =============================================================================
 # 4. HEADERS (FIX)
 # =============================================================================
+RAW_COLUMNS = [
+    "ip", "endpoint", "status", "timestamp",
+    "execution_time", "rows_scanned", "joins_count"
+]
+
 VALID_COLUMNS = [
     "ip", "endpoint", "status", "timestamp",
     "execution_time", "rows_scanned", "joins_count"
@@ -88,7 +123,8 @@ def ensure_csv_header(file_path, columns):
             f.write(existing_content)
 
 # create/repair headers
-ensure_csv_header(valid_csv, VALID_COLUMNS)
+ensure_csv_header(raw_csv, RAW_COLUMNS)
+ensure_csv_header(cleaned_csv, VALID_COLUMNS)
 ensure_csv_header(rejected_csv, REJECTED_COLUMNS)
 
 # =============================================================================
@@ -160,16 +196,17 @@ def generate_log(profile):
 # 6. INIT
 # =============================================================================
 run_id = str(uuid.uuid4())
-metrics_initialized = False
 
 valid_buffer = []
 reject_buffer = []
+csv_raw_buffer = []
 csv_valid_buffer = []
 csv_reject_buffer = []
 
 total = inserted = rejected = 0
 
 print("🚀 Live stream started (CTRL+C to stop)")
+ensure_etl_parent(run_id)
 
 # =============================================================================
 # 7. MAIN LOOP
@@ -185,6 +222,7 @@ try:
                 profile = random.choice(USER_PROFILES)
                 row = generate_log(profile)
                 total += 1
+                csv_raw_buffer.append(row)
 
                 reason = validate(row)
 
@@ -212,18 +250,6 @@ try:
             print(f"Inserted {cycle_inserted} rows")
 
             # =============================================================================
-            # METRICS INIT
-            # =============================================================================
-            if not metrics_initialized:
-                cursor.execute("""
-                    INSERT INTO etl_metrics
-                    (run_id, source_type, total_rows, inserted_rows, rejected_rows, load_time)
-                    VALUES (%s,%s,%s,%s,%s,%s)
-                """, (run_id, "api", total, inserted, rejected, datetime.now()))
-                conn.commit()
-                metrics_initialized = True
-
-            # =============================================================================
             # BATCH INSERTS
             # =============================================================================
             if len(valid_buffer) >= 20:
@@ -236,6 +262,8 @@ try:
                 conn.commit()
 
             if len(reject_buffer) >= 10:
+                # Recreate parent ETL row if it was removed externally (for example after TRUNCATE).
+                ensure_etl_parent(run_id)
                 cursor.executemany("""
                     INSERT INTO rejected_logs
                     (etl_run_id, source_type, line_number, reason, raw_payload)
@@ -247,11 +275,20 @@ try:
             # =============================================================================
             # CSV BATCH WRITE (NO HEADER DUPLICATION)
             # =============================================================================
+            if len(csv_raw_buffer) >= 25:
+                pd.DataFrame(csv_raw_buffer)[RAW_COLUMNS].to_csv(
+                    raw_csv,
+                    mode="a",
+                    header=needs_header(raw_csv),
+                    index=False
+                )
+                csv_raw_buffer.clear()
+
             if len(csv_valid_buffer) >= 25:
                 pd.DataFrame(csv_valid_buffer)[VALID_COLUMNS].to_csv(
-                    valid_csv,
+                    cleaned_csv,
                     mode="a",
-                    header=needs_header(valid_csv),
+                    header=needs_header(cleaned_csv),
                     index=False
                 )
                 csv_valid_buffer.clear()
@@ -271,13 +308,7 @@ try:
             if total % 50 == 0:
                 assert total >= inserted + rejected
 
-                cursor.execute("""
-                    UPDATE etl_metrics
-                    SET total_rows=%s, inserted_rows=%s, rejected_rows=%s
-                    WHERE run_id=%s
-                """, (total, inserted, rejected, run_id))
-
-                conn.commit()
+                upsert_etl_metrics(run_id, total, inserted, rejected)
 
                 print(f"Logs={total} Inserted={inserted} Rejected={rejected}")
 
@@ -285,7 +316,12 @@ try:
 
         except mysql.connector.Error as e:
             print("❌ DB Error:", e)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             reconnect()
+            ensure_etl_parent(run_id)
 
 # =============================================================================
 # 8. CLEAN EXIT
@@ -302,6 +338,7 @@ except KeyboardInterrupt:
         valid_buffer.clear()
 
     if reject_buffer:
+        ensure_etl_parent(run_id)
         cursor.executemany("""
             INSERT INTO rejected_logs
             (etl_run_id, source_type, line_number, reason, raw_payload)
@@ -309,11 +346,19 @@ except KeyboardInterrupt:
         """, reject_buffer)
         reject_buffer.clear()
 
+    if csv_raw_buffer:
+        pd.DataFrame(csv_raw_buffer)[RAW_COLUMNS].to_csv(
+            raw_csv,
+            mode="a",
+            header=needs_header(raw_csv),
+            index=False
+        )
+
     if csv_valid_buffer:
         pd.DataFrame(csv_valid_buffer)[VALID_COLUMNS].to_csv(
-            valid_csv,
+            cleaned_csv,
             mode="a",
-            header=needs_header(valid_csv),
+            header=needs_header(cleaned_csv),
             index=False
         )
 
@@ -325,13 +370,7 @@ except KeyboardInterrupt:
             index=False
         )
 
-    cursor.execute("""
-        UPDATE etl_metrics
-        SET total_rows=%s, inserted_rows=%s, rejected_rows=%s
-        WHERE run_id=%s
-    """, (total, inserted, rejected, run_id))
-
-    conn.commit()
+    upsert_etl_metrics(run_id, total, inserted, rejected)
     cursor.close()
     conn.close()
 

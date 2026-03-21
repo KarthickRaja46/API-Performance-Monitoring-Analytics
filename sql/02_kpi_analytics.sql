@@ -1,5 +1,7 @@
 USE performance_monitoring;
 
+SET @sla_threshold_sec = 0.5;
+
 -- =============================================================================
 -- KPI & ETL ANALYTICS
 -- =============================================================================
@@ -32,26 +34,36 @@ SELECT ROUND(
 FROM etl_metrics;
 
 -- Overall System Health Score
+WITH base AS (
+    SELECT
+        execution_time / 1000.0 AS exec_sec,
+        CASE WHEN status = 200 THEN 1 ELSE 0 END AS is_success,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error,
+        CASE WHEN status = 404 THEN 1 ELSE 0 END AS is_not_found,
+        CASE WHEN (execution_time / 1000.0) > @sla_threshold_sec THEN 1 ELSE 0 END AS is_sla_breach
+    FROM system_logs
+)
 SELECT
     COUNT(*) AS total_requests,
-    ROUND(AVG(execution_time) / 1000.0, 3) AS avg_latency_sec,
-    ROUND(SUM(status = 200) * 100.0 / NULLIF(COUNT(*), 0), 2) AS success_rate_pct,
-    ROUND(SUM(status = 500) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
-    ROUND(SUM(execution_time > 500) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_pct,
+    ROUND(AVG(exec_sec), 3) AS avg_latency_sec,
+    ROUND(SUM(CASE WHEN is_success = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS success_rate_pct,
+    ROUND(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
+    ROUND(SUM(CASE WHEN is_not_found = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS not_found_rate_pct,
+    ROUND(SUM(CASE WHEN is_sla_breach = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_rate_pct,
     ROUND(
         (
-            (SUM(status = 200) * 1.0 / NULLIF(COUNT(*), 0) * 0.5) +
-            ((1 - SUM(status = 500) * 1.0 / NULLIF(COUNT(*), 0)) * 0.3) +
-            ((1 - SUM(execution_time > 500) * 1.0 / NULLIF(COUNT(*), 0)) * 0.2)
+            (SUM(CASE WHEN is_success = 1 THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0) * 0.50) +
+            ((1 - (SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0))) * 0.30) +
+            ((1 - (SUM(CASE WHEN is_sla_breach = 1 THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0))) * 0.20)
         ) * 100,
     2) AS health_score_pct
-FROM system_logs;
+FROM base;
 
 -- Query Category Summary
-SELECT 'basic_query_count' AS metric, 14 AS value
+SELECT 'basic_query_count' AS metric, 16 AS value
 UNION ALL
-SELECT 'advanced_query_count' AS metric, 6 AS value
+SELECT 'advanced_query_count' AS metric, 8 AS value
 UNION ALL
-SELECT 'other_query_count' AS metric, 0 AS value
+SELECT 'kpi_query_count' AS metric, 4 AS value
 UNION ALL
-SELECT 'total_query_count' AS metric, 20 AS value;
+SELECT 'total_query_count' AS metric, 28 AS value;

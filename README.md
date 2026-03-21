@@ -5,18 +5,23 @@ A Python + MySQL project to simulate real-time system logs, store valid/rejected
 ## Project Structure
 
 - `Log_simulator.py` - Live log simulator with validation, DB insert, and CSV export
-- `data/system_logs.csv` - Valid log export (header + data)
+- `.gitignore` - Repository ignore rules for generated/local files
+- `RELEASE_NOTES.md` - Release highlights and verification summary
+- `data/log.csv` - Raw generated logs (before validation)
+- `data/cleaned_logs.csv` - Cleaned/valid logs (after validation)
 - `data/rejected_logs.csv` - Rejected log export (header + data)
-- `sql/schema.sql` - Database schema and indexes
+- `sql/00_schema.sql` - Database schema and indexes
+- `sql/00_reset_data.sql` - Full data reset (truncate generated data)
 - `sql/01_basic_analytics.sql` - Basic analytics queries
-- `sql/02_advanced_analytics.sql` - Advanced analytics queries
-- `sql/03_kpi_analytics.sql` - KPI and ETL quality queries
+- `sql/02_kpi_analytics.sql` - KPI and ETL quality queries
+- `sql/03_advanced_analytics.sql` - Advanced analytics queries
 - `sql/04_master_analytics.sql` - Combined analytics script
+- `sql/99_prepublish_check.sql` - Final publish readiness checks
 
 ## Prerequisites
 
 - Python 3.10+
-- MySQL Server running locally
+- MySQL Server 8.0+ running locally
 - Python packages:
   - `pandas`
   - `mysql-connector-python`
@@ -33,7 +38,7 @@ pip install pandas mysql-connector-python
 2. Run:
 
 ```sql
-source sql/schema.sql;
+source sql/00_schema.sql;
 ```
 
 This creates:
@@ -56,11 +61,13 @@ When prompted, enter your MySQL password.
 
 What it does:
 - Generates random realistic logs continuously
+- Writes all generated rows to `data/log.csv` (raw layer)
 - Validates data quality rules
 - Inserts valid rows into `system_logs`
+- Writes valid rows to `data/cleaned_logs.csv`
 - Inserts invalid rows into `rejected_logs`
 - Tracks run metrics in `etl_metrics`
-- Writes CSV outputs into `data/`
+- Writes rejected rows to `data/rejected_logs.csv`
 
 Stop with `CTRL+C` for clean shutdown and buffer flush.
 
@@ -68,18 +75,32 @@ Stop with `CTRL+C` for clean shutdown and buffer flush.
 
 Run in this order:
 
-1. `sql/01_basic_analytics.sql`
-2. `sql/02_advanced_analytics.sql`
-3. `sql/03_kpi_analytics.sql`
+1. `sql/00_reset_data.sql` (optional, for clean run)
+2. `sql/01_basic_analytics.sql`
+3. `sql/03_advanced_analytics.sql`
+4. `sql/02_kpi_analytics.sql`
 
 Or run all together:
 
 - `sql/04_master_analytics.sql`
 
+## Pre-Publish Verification
+
+Run this final checklist in MySQL Workbench before publishing:
+
+- `sql/99_prepublish_check.sql`
+
+Expected checks:
+- No missing required tables
+- `orphan_rejected_rows = 0`
+- Advanced window-function check executes successfully
+
 ## Notes
 
 - CSV headers are auto-ensured in simulator startup.
 - Analytics files are split for clarity and ordered execution.
+- Analytics latency outputs are standardized in seconds.
+- If you run `sql/00_reset_data.sql`, stop the simulator first and restart it after reset.
 - Main branch is configured for the active GitHub repository.
 
 ## Sample Output

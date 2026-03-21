@@ -1,201 +1,339 @@
 USE performance_monitoring;
 
 -- =============================================================================
--- MERGED ANALYTICS MASTER
+-- MASTER ANALYTICS (PRODUCTION-READY)
 -- =============================================================================
 
--- ===== From analytics_basic.sql =====
+-- Shared assumptions:
+-- 1) execution_time is stored in milliseconds in system_logs.
+-- 2) All latency outputs are standardized to seconds with 3-decimal precision.
+-- 3) SLA breach threshold is 0.5 sec.
+
+SET @sla_threshold_sec = 0.5;
 
 -- =============================================================================
 -- BASIC ANALYTICS
 -- =============================================================================
 
--- Total Requests
-SELECT COUNT(*) AS total_requests
-FROM system_logs;
-
--- Success Rate (%)
-SELECT ROUND(
-    SUM(CASE WHEN status = 200 THEN 1 ELSE 0 END) * 100.0
-    / NULLIF(COUNT(*), 0),
-2) AS success_rate_pct
-FROM system_logs;
-
--- Error Rate (%)
-SELECT ROUND(
-    SUM(CASE WHEN status = 500 THEN 1 ELSE 0 END) * 100.0
-    / NULLIF(COUNT(*), 0),
-2) AS error_rate_pct
-FROM system_logs;
-
--- Average Response Time (seconds)
-SELECT ROUND(AVG(execution_time) / 1000.0, 3) AS avg_latency_sec
-FROM system_logs;
-
--- Slow Requests (>1 sec)
-SELECT COUNT(*) AS slow_requests
-FROM system_logs
-WHERE execution_time > 1000;
-
--- Daily Average Latency
+WITH base AS (
+    SELECT
+        id,
+        ip,
+        endpoint,
+        status,
+        `timestamp`,
+        DATE(`timestamp`) AS request_date,
+        DATE_FORMAT(`timestamp`, '%Y-%m-%d %H:%i:00') AS minute_bucket,
+        execution_time / 1000.0 AS exec_sec,
+        CASE WHEN status = 200 THEN 1 ELSE 0 END AS is_success,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error,
+        CASE WHEN status = 404 THEN 1 ELSE 0 END AS is_not_found,
+        CASE WHEN (execution_time / 1000.0) > @sla_threshold_sec THEN 1 ELSE 0 END AS is_sla_breach
+    FROM system_logs
+)
 SELECT
-    DATE(`timestamp`) AS request_date,
-    ROUND(AVG(execution_time) / 1000.0, 3) AS avg_latency_sec
-FROM system_logs
+    COUNT(*) AS total_requests,
+    ROUND(AVG(exec_sec), 3) AS avg_latency_sec,
+    ROUND(MAX(exec_sec), 3) AS max_latency_sec,
+    ROUND(MIN(exec_sec), 3) AS min_latency_sec,
+    ROUND(SUM(CASE WHEN is_success = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS success_rate_pct,
+    ROUND(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
+    ROUND(SUM(CASE WHEN is_not_found = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS not_found_rate_pct,
+    ROUND(SUM(CASE WHEN is_sla_breach = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_rate_pct
+FROM base;
+
+WITH base AS (
+    SELECT
+        endpoint,
+        DATE(`timestamp`) AS request_date,
+        execution_time / 1000.0 AS exec_sec,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error,
+        CASE WHEN (execution_time / 1000.0) > @sla_threshold_sec THEN 1 ELSE 0 END AS is_sla_breach
+    FROM system_logs
+)
+SELECT
+    request_date,
+    ROUND(AVG(exec_sec), 3) AS avg_latency_sec,
+    ROUND(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
+    ROUND(SUM(CASE WHEN is_sla_breach = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_rate_pct
+FROM base
 GROUP BY request_date
 ORDER BY request_date;
 
--- Requests Per Minute
+WITH base AS (
+    SELECT
+        DATE_FORMAT(`timestamp`, '%Y-%m-%d %H:%i:00') AS minute_bucket
+    FROM system_logs
+)
 SELECT
-    DATE_FORMAT(`timestamp`, '%Y-%m-%d %H:%i:00') AS minute_bucket,
+    minute_bucket,
     COUNT(*) AS requests_per_minute
-FROM system_logs
+FROM base
 GROUP BY minute_bucket
 ORDER BY minute_bucket DESC
 LIMIT 60;
 
--- Hourly Error Rate
+WITH base AS (
+    SELECT
+        endpoint,
+        execution_time / 1000.0 AS exec_sec,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error,
+        CASE WHEN (execution_time / 1000.0) > @sla_threshold_sec THEN 1 ELSE 0 END AS is_sla_breach
+    FROM system_logs
+)
 SELECT
-    HOUR(`timestamp`) AS hour,
-    ROUND(
-        SUM(CASE WHEN status = 500 THEN 1 ELSE 0 END) * 100.0
-        / NULLIF(COUNT(*), 0),
-    2) AS error_rate_pct
-FROM system_logs
-GROUP BY hour
-ORDER BY hour;
-
--- Daily Status Trend
-SELECT
-    DATE(`timestamp`) AS request_date,
-    status,
-    COUNT(*) AS request_count
-FROM system_logs
-GROUP BY request_date, status
-ORDER BY request_date DESC;
-
--- Top Endpoints
-SELECT endpoint, COUNT(*) AS request_count
-FROM system_logs
+    endpoint,
+    COUNT(*) AS total_requests,
+    ROUND(AVG(exec_sec), 3) AS avg_latency_sec,
+    ROUND(MAX(exec_sec), 3) AS max_latency_sec,
+    ROUND(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
+    ROUND(SUM(CASE WHEN is_sla_breach = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_rate_pct
+FROM base
 GROUP BY endpoint
-ORDER BY request_count DESC
+ORDER BY total_requests DESC, avg_latency_sec DESC
 LIMIT 10;
-
--- Endpoint Latency Summary
-SELECT
-    endpoint,
-    ROUND(AVG(execution_time) / 1000.0, 3) AS avg_latency_sec,
-    ROUND(MAX(execution_time) / 1000.0, 3) AS max_latency_sec
-FROM system_logs
-GROUP BY endpoint
-ORDER BY avg_latency_sec DESC;
-
--- Endpoint Error Rate
-SELECT
-    endpoint,
-    ROUND(
-        SUM(CASE WHEN status = 500 THEN 1 ELSE 0 END) * 100.0
-        / NULLIF(COUNT(*), 0),
-    2) AS error_rate_pct
-FROM system_logs
-GROUP BY endpoint
-ORDER BY error_rate_pct DESC;
-
--- SLA Breach Rate (>500 ms)
-SELECT
-    endpoint,
-    ROUND(
-        SUM(CASE WHEN execution_time > 500 THEN 1 ELSE 0 END) * 100.0
-        / NULLIF(COUNT(*), 0),
-    2) AS sla_breach_pct
-FROM system_logs
-GROUP BY endpoint
-ORDER BY sla_breach_pct DESC;
-
--- ===== From analytics_advanced.sql =====
 
 -- =============================================================================
 -- ADVANCED ANALYTICS
 -- =============================================================================
 
--- Latency Distribution
+WITH base AS (
+    SELECT
+        endpoint,
+        `timestamp`,
+        DATE(`timestamp`) AS request_date,
+        DATE_FORMAT(`timestamp`, '%Y-%m-%d %H:%i:00') AS minute_bucket,
+        execution_time / 1000.0 AS exec_sec,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error,
+        CASE WHEN (execution_time / 1000.0) > @sla_threshold_sec THEN 1 ELSE 0 END AS is_sla_breach
+    FROM system_logs
+)
 SELECT
     CASE
-        WHEN execution_time <= 100 THEN 'Excellent'
-        WHEN execution_time <= 300 THEN 'Good'
-        WHEN execution_time <= 700 THEN 'Moderate'
+        WHEN exec_sec <= 0.100 THEN 'Excellent'
+        WHEN exec_sec <= 0.300 THEN 'Good'
+        WHEN exec_sec <= 0.700 THEN 'Moderate'
         ELSE 'Slow'
     END AS latency_bucket,
     COUNT(*) AS request_count
-FROM system_logs
+FROM base
 GROUP BY latency_bucket
 ORDER BY request_count DESC;
 
--- P95 Latency (seconds)
-WITH ranked AS (
-    SELECT
-        execution_time,
-        CUME_DIST() OVER (ORDER BY execution_time) AS cd
-    FROM system_logs
-)
-SELECT ROUND(
-    MIN(CASE WHEN cd >= 0.95 THEN execution_time END) / 1000.0,
-3) AS p95_latency_sec
-FROM ranked;
-
--- P99 Latency (seconds)
-WITH ranked AS (
-    SELECT
-        execution_time,
-        CUME_DIST() OVER (ORDER BY execution_time) AS cd
-    FROM system_logs
-)
-SELECT ROUND(
-    MIN(CASE WHEN cd >= 0.99 THEN execution_time END) / 1000.0,
-3) AS p99_latency_sec
-FROM ranked;
-
--- Endpoint P95 Latency
-WITH endpoint_ranked AS (
+WITH base AS (
     SELECT
         endpoint,
-        execution_time,
-        CUME_DIST() OVER (PARTITION BY endpoint ORDER BY execution_time) AS cd
+        execution_time / 1000.0 AS exec_sec
     FROM system_logs
+),
+ranked AS (
+    SELECT
+        endpoint,
+        exec_sec,
+        CUME_DIST() OVER (ORDER BY exec_sec) AS cd_global,
+        CUME_DIST() OVER (PARTITION BY endpoint ORDER BY exec_sec) AS cd_endpoint
+    FROM base
+)
+SELECT
+    ROUND(MIN(CASE WHEN cd_global >= 0.95 THEN exec_sec END), 3) AS p95_latency_sec,
+    ROUND(MIN(CASE WHEN cd_global >= 0.99 THEN exec_sec END), 3) AS p99_latency_sec
+FROM ranked;
+
+WITH base AS (
+    SELECT
+        endpoint,
+        execution_time / 1000.0 AS exec_sec
+    FROM system_logs
+),
+ranked AS (
+    SELECT
+        endpoint,
+        exec_sec,
+        CUME_DIST() OVER (PARTITION BY endpoint ORDER BY exec_sec) AS cd
+    FROM base
 )
 SELECT
     endpoint,
-    ROUND(MIN(CASE WHEN cd >= 0.95 THEN execution_time END) / 1000.0, 3) AS p95_latency_sec
-FROM endpoint_ranked
+    ROUND(MIN(CASE WHEN cd >= 0.95 THEN exec_sec END), 3) AS p95_latency_sec,
+    ROUND(MIN(CASE WHEN cd >= 0.99 THEN exec_sec END), 3) AS p99_latency_sec
+FROM ranked
 GROUP BY endpoint
-ORDER BY p95_latency_sec DESC;
+ORDER BY p99_latency_sec DESC, p95_latency_sec DESC;
 
--- Endpoint Risk Mix
+-- 7-day rolling averages (traffic, latency, error)
+WITH base AS (
+    SELECT
+        DATE(`timestamp`) AS request_date,
+        execution_time / 1000.0 AS exec_sec,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error
+    FROM system_logs
+),
+daily AS (
+    SELECT
+        request_date,
+        COUNT(*) AS total_requests,
+        ROUND(AVG(exec_sec), 3) AS avg_latency_sec,
+        ROUND(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct
+    FROM base
+    GROUP BY request_date
+)
+SELECT
+    request_date,
+    total_requests,
+    avg_latency_sec,
+    error_rate_pct,
+    ROUND(AVG(total_requests) OVER (
+        ORDER BY request_date
+        ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+    ), 2) AS traffic_rolling_7d,
+    ROUND(AVG(avg_latency_sec) OVER (
+        ORDER BY request_date
+        ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+    ), 3) AS latency_rolling_7d_sec,
+    ROUND(AVG(error_rate_pct) OVER (
+        ORDER BY request_date
+        ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+    ), 2) AS error_rate_rolling_7d_pct
+FROM daily
+ORDER BY request_date;
+
+-- Error spike detection (daily z-score style against prior 7-day baseline)
+WITH base AS (
+    SELECT
+        DATE(`timestamp`) AS request_date,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error
+    FROM system_logs
+),
+daily AS (
+    SELECT
+        request_date,
+        ROUND(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct
+    FROM base
+    GROUP BY request_date
+),
+baseline AS (
+    SELECT
+        request_date,
+        error_rate_pct,
+        AVG(error_rate_pct) OVER (
+            ORDER BY request_date
+            ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+        ) AS prior_7d_avg_error_rate,
+        STDDEV_SAMP(error_rate_pct) OVER (
+            ORDER BY request_date
+            ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+        ) AS prior_7d_std_error_rate
+    FROM daily
+)
+SELECT
+    request_date,
+    error_rate_pct,
+    ROUND(prior_7d_avg_error_rate, 2) AS prior_7d_avg_error_rate,
+    ROUND(prior_7d_std_error_rate, 2) AS prior_7d_std_error_rate,
+    CASE
+        WHEN prior_7d_std_error_rate IS NULL OR prior_7d_std_error_rate = 0 THEN 0
+        WHEN error_rate_pct > prior_7d_avg_error_rate + (2 * prior_7d_std_error_rate) THEN 1
+        ELSE 0
+    END AS is_error_spike
+FROM baseline
+ORDER BY request_date;
+
+-- Traffic surge detection (minute-level current vs prior 60-minute average)
+WITH base AS (
+    SELECT
+        DATE_FORMAT(`timestamp`, '%Y-%m-%d %H:%i:00') AS minute_bucket
+    FROM system_logs
+),
+minute_agg AS (
+    SELECT
+        minute_bucket,
+        COUNT(*) AS requests_per_minute
+    FROM base
+    GROUP BY minute_bucket
+),
+surge AS (
+    SELECT
+        minute_bucket,
+        requests_per_minute,
+        AVG(requests_per_minute) OVER (
+            ORDER BY minute_bucket
+            ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING
+        ) AS prior_60m_avg
+    FROM minute_agg
+)
+SELECT
+    minute_bucket,
+    requests_per_minute,
+    ROUND(prior_60m_avg, 2) AS prior_60m_avg,
+    CASE
+        WHEN prior_60m_avg IS NULL THEN 0
+        WHEN requests_per_minute >= (prior_60m_avg * 1.5) THEN 1
+        ELSE 0
+    END AS is_traffic_surge
+FROM surge
+ORDER BY minute_bucket DESC
+LIMIT 180;
+
+-- Endpoint risk scoring (weighted by error, SLA breach, and latency)
+WITH base AS (
+    SELECT
+        endpoint,
+        execution_time / 1000.0 AS exec_sec,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error,
+        CASE WHEN (execution_time / 1000.0) > @sla_threshold_sec THEN 1 ELSE 0 END AS is_sla_breach
+    FROM system_logs
+),
+endpoint_metrics AS (
+    SELECT
+        endpoint,
+        COUNT(*) AS total_requests,
+        ROUND(AVG(exec_sec), 3) AS avg_latency_sec,
+        ROUND(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
+        ROUND(SUM(CASE WHEN is_sla_breach = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_rate_pct
+    FROM base
+    GROUP BY endpoint
+)
 SELECT
     endpoint,
-    COUNT(*) AS total_requests,
-    ROUND(SUM(CASE WHEN status = 500 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
-    ROUND(SUM(CASE WHEN execution_time > 500 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_pct
-FROM system_logs
-GROUP BY endpoint
-ORDER BY error_rate_pct DESC, sla_breach_pct DESC;
-
--- Rejected Distribution
-SELECT
-    reason,
-    COUNT(*) AS rejected_count,
-    ROUND(COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM rejected_logs), 0), 2) AS rejected_share_pct
-FROM rejected_logs
-GROUP BY reason
-ORDER BY rejected_count DESC;
-
--- ===== From analytics_kpi.sql =====
+    total_requests,
+    avg_latency_sec,
+    error_rate_pct,
+    sla_breach_rate_pct,
+    ROUND(
+        (error_rate_pct * 0.50) +
+        (sla_breach_rate_pct * 0.35) +
+        (LEAST(avg_latency_sec / NULLIF(@sla_threshold_sec, 0), 2) * 100 * 0.15),
+    2) AS endpoint_risk_score
+FROM endpoint_metrics
+ORDER BY endpoint_risk_score DESC, total_requests DESC;
 
 -- =============================================================================
 -- KPI & ETL ANALYTICS
 -- =============================================================================
 
--- ETL Inserted vs Rejected (%)
+WITH base AS (
+    SELECT
+        execution_time / 1000.0 AS exec_sec,
+        CASE WHEN status = 200 THEN 1 ELSE 0 END AS is_success,
+        CASE WHEN status = 500 THEN 1 ELSE 0 END AS is_error,
+        CASE WHEN (execution_time / 1000.0) > @sla_threshold_sec THEN 1 ELSE 0 END AS is_sla_breach
+    FROM system_logs
+)
+SELECT
+    COUNT(*) AS total_requests,
+    ROUND(AVG(exec_sec), 3) AS avg_latency_sec,
+    ROUND(SUM(CASE WHEN is_success = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS success_rate_pct,
+    ROUND(SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
+    ROUND(SUM(CASE WHEN is_sla_breach = 1 THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_rate_pct,
+    ROUND(
+        (
+            (SUM(CASE WHEN is_success = 1 THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0) * 0.50) +
+            ((1 - (SUM(CASE WHEN is_error = 1 THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0))) * 0.30) +
+            ((1 - (SUM(CASE WHEN is_sla_breach = 1 THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0))) * 0.20)
+        ) * 100,
+    2) AS health_score_pct
+FROM base;
+
 SELECT
     run_id,
     source_type,
@@ -208,41 +346,43 @@ SELECT
 FROM etl_metrics
 ORDER BY load_time DESC;
 
--- Rejected Data by Reason
 SELECT
     reason,
-    COUNT(*) AS rejected_count
+    COUNT(*) AS rejected_count,
+    ROUND(COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM rejected_logs), 0), 2) AS rejected_share_pct
 FROM rejected_logs
 GROUP BY reason
 ORDER BY rejected_count DESC;
 
--- ETL Freshness (minutes since last load)
-SELECT ROUND(
-    TIMESTAMPDIFF(SECOND, MAX(load_time), NOW()) / 60.0,
-2) AS minutes_since_last_load
+SELECT
+    ROUND(TIMESTAMPDIFF(SECOND, MAX(load_time), NOW()) / 60.0, 2) AS minutes_since_last_load
 FROM etl_metrics;
 
--- Overall System Health Score
-SELECT
-    COUNT(*) AS total_requests,
-    ROUND(AVG(execution_time) / 1000.0, 3) AS avg_latency_sec,
-    ROUND(SUM(status = 200) * 100.0 / NULLIF(COUNT(*), 0), 2) AS success_rate_pct,
-    ROUND(SUM(status = 500) * 100.0 / NULLIF(COUNT(*), 0), 2) AS error_rate_pct,
-    ROUND(SUM(execution_time > 500) * 100.0 / NULLIF(COUNT(*), 0), 2) AS sla_breach_pct,
-    ROUND(
-        (
-            (SUM(status = 200) * 1.0 / NULLIF(COUNT(*), 0) * 0.5) +
-            ((1 - SUM(status = 500) * 1.0 / NULLIF(COUNT(*), 0)) * 0.3) +
-            ((1 - SUM(execution_time > 500) * 1.0 / NULLIF(COUNT(*), 0)) * 0.2)
-        ) * 100,
-    2) AS health_score_pct
-FROM system_logs;
+-- =============================================================================
+-- QUERY CATEGORY PARTITION (REPRESENTATIVE FILES)
+-- =============================================================================
 
--- Query Category Summary
-SELECT 'basic_query_count' AS metric, 14 AS value
+SELECT
+    1 AS category_order,
+    'BASIC ANALYTICS' AS query_category,
+    'sql/01_basic_analytics.sql' AS representative_file,
+    16 AS query_count
 UNION ALL
-SELECT 'advanced_query_count' AS metric, 6 AS value
+SELECT
+    2 AS category_order,
+    'ADVANCED ANALYTICS' AS query_category,
+    'sql/03_advanced_analytics.sql' AS representative_file,
+    8 AS query_count
 UNION ALL
-SELECT 'other_query_count' AS metric, 0 AS value
+SELECT
+    3 AS category_order,
+    'KPI & HEALTH METRICS' AS query_category,
+    'sql/02_kpi_analytics.sql' AS representative_file,
+    4 AS query_count
 UNION ALL
-SELECT 'total_query_count' AS metric, 20 AS value;
+SELECT
+    4 AS category_order,
+    'MASTER ANALYTICS' AS query_category,
+    'sql/04_master_analytics.sql' AS representative_file,
+    28 AS query_count
+ORDER BY category_order;

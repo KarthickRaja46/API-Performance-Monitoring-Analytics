@@ -1,5 +1,4 @@
 USE performance_monitoring;
-
 -- =============================================================================
 -- BASIC ANALYTICS
 -- =============================================================================
@@ -22,6 +21,13 @@ SELECT ROUND(
 2) AS error_rate_pct
 FROM system_logs;
 
+-- Not Found Rate (%)
+SELECT ROUND(
+    SUM(CASE WHEN status = 404 THEN 1 ELSE 0 END) * 100.0
+    / NULLIF(COUNT(*), 0),
+2) AS not_found_rate_pct
+FROM system_logs;
+
 -- Average Response Time (seconds)
 SELECT ROUND(AVG(execution_time) / 1000.0, 3) AS avg_latency_sec
 FROM system_logs;
@@ -29,7 +35,7 @@ FROM system_logs;
 -- Slow Requests (>1 sec)
 SELECT COUNT(*) AS slow_requests
 FROM system_logs
-WHERE execution_time > 1000;
+WHERE (execution_time / 1000.0) > 1.0;
 
 -- Daily Average Latency
 SELECT
@@ -47,6 +53,15 @@ FROM system_logs
 GROUP BY minute_bucket
 ORDER BY minute_bucket DESC
 LIMIT 60;
+
+-- Peak Minute Traffic
+SELECT
+    DATE_FORMAT(`timestamp`, '%Y-%m-%d %H:%i:00') AS minute_bucket,
+    COUNT(*) AS request_count
+FROM system_logs
+GROUP BY minute_bucket
+ORDER BY request_count DESC, minute_bucket DESC
+LIMIT 1;
 
 -- Hourly Error Rate
 SELECT
@@ -75,6 +90,17 @@ GROUP BY endpoint
 ORDER BY request_count DESC
 LIMIT 10;
 
+-- Top Slow Endpoints (>0.5 sec)
+SELECT
+    endpoint,
+    COUNT(*) AS slow_request_count,
+    ROUND(AVG(execution_time) / 1000.0, 3) AS avg_latency_sec
+FROM system_logs
+WHERE (execution_time / 1000.0) > 0.5
+GROUP BY endpoint
+ORDER BY slow_request_count DESC, avg_latency_sec DESC
+LIMIT 10;
+
 -- Endpoint Latency Summary
 SELECT
     endpoint,
@@ -95,11 +121,11 @@ FROM system_logs
 GROUP BY endpoint
 ORDER BY error_rate_pct DESC;
 
--- SLA Breach Rate (>500 ms)
+-- SLA Breach Rate (>0.5 sec)
 SELECT
     endpoint,
     ROUND(
-        SUM(CASE WHEN execution_time > 500 THEN 1 ELSE 0 END) * 100.0
+        SUM(CASE WHEN (execution_time / 1000.0) > 0.5 THEN 1 ELSE 0 END) * 100.0
         / NULLIF(COUNT(*), 0),
     2) AS sla_breach_pct
 FROM system_logs
