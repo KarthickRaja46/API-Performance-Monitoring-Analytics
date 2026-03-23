@@ -1,7 +1,6 @@
 CREATE DATABASE performance_monitoring;
 USE performance_monitoring;
-
--- 1) SYSTEM LOGS TABLE
+-- SYSTEM LOGS TABLE
 CREATE TABLE system_logs (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     ip VARCHAR(45) NOT NULL,
@@ -27,9 +26,7 @@ CREATE INDEX idx_endpoint ON system_logs(endpoint);
 CREATE INDEX idx_status ON system_logs(status);
 CREATE INDEX idx_logs_etl_run ON system_logs(etl_run_id);
 CREATE INDEX idx_logs_endpoint_timestamp ON system_logs(endpoint, `timestamp`);
-
-
--- 2) ETL METRICS TABLE
+-- ETL METRICS TABLE
 CREATE TABLE etl_metrics (
     run_id VARCHAR(36) NOT NULL,
     source_type VARCHAR(20) NOT NULL,
@@ -48,9 +45,7 @@ CREATE TABLE etl_metrics (
 );
 
 CREATE INDEX idx_etl_load_time ON etl_metrics(load_time);
-
-
--- 3) REJECTED LOGS TABLE
+-- REJECTED LOGS TABLE
 CREATE TABLE rejected_logs (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     etl_run_id VARCHAR(36) NOT NULL,
@@ -68,9 +63,7 @@ CREATE TABLE rejected_logs (
 
 CREATE INDEX idx_rejected_reason ON rejected_logs(reason);
 CREATE INDEX idx_rejected_etl_run ON rejected_logs(etl_run_id);
-
-
--- 4) ARCHIVE TABLE
+-- ARCHIVE TABLE
 CREATE TABLE system_logs_archive (
     id BIGINT UNSIGNED NOT NULL,
     ip VARCHAR(45) NOT NULL,
@@ -88,9 +81,7 @@ CREATE TABLE system_logs_archive (
 );
 
 CREATE INDEX idx_archive_timestamp ON system_logs_archive(`timestamp`);
-
-
--- 5) ALERT CONFIG TABLE
+-- ALERT CONFIG TABLE
 CREATE TABLE alert_threshold_config (
     config_id INT AUTO_INCREMENT PRIMARY KEY,
     metric_name VARCHAR(100) NOT NULL,
@@ -98,8 +89,7 @@ CREATE TABLE alert_threshold_config (
     comparison_operator VARCHAR(10) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
--- 6) ALERTS TABLE
+-- ALERTS TABLE
 CREATE TABLE alerts (
     alert_id BIGINT AUTO_INCREMENT PRIMARY KEY,
     endpoint VARCHAR(255),
@@ -113,12 +103,15 @@ CREATE INDEX idx_alerts_severity ON alerts(severity);
 
 
 -- ARCHIVE PROCEDURE
-DROP PROCEDURE sp_archive_old_system_logs;
+DROP PROCEDURE IF EXISTS sp_archive_old_system_logs;
 
 DELIMITER $$
 
 CREATE PROCEDURE sp_archive_old_system_logs()
 BEGIN
+    DECLARE v_archived_rows BIGINT DEFAULT 0;
+    DECLARE v_deleted_rows BIGINT DEFAULT 0;
+
     INSERT IGNORE INTO system_logs_archive (
         id, ip, endpoint, status, `timestamp`,
         execution_time, rows_scanned, joins_count,
@@ -131,8 +124,104 @@ BEGIN
     FROM system_logs
     WHERE `timestamp` < NOW() - INTERVAL 90 DAY;
 
+    SET v_archived_rows = ROW_COUNT();
+
     DELETE FROM system_logs
     WHERE `timestamp` < NOW() - INTERVAL 90 DAY;
+
+    SET v_deleted_rows = ROW_COUNT();
+
+    SELECT
+        'archive_completed' AS status,
+        v_archived_rows AS archived_rows,
+        v_deleted_rows AS deleted_rows,
+        NOW() AS run_time;
+END $$
+
+DELIMITER ;
+
+-- SYSTEM HEALTH CHECK PROCEDURE
+DROP PROCEDURE IF EXISTS sp_system_health_check;
+
+DELIMITER $$
+
+CREATE PROCEDURE sp_system_health_check()
+BEGIN
+    DECLARE v_total_requests BIGINT DEFAULT 0;
+    DECLARE v_error_rate_pct DECIMAL(10,2) DEFAULT 0.00;
+    DECLARE v_avg_execution_time_sec DECIMAL(10,3) DEFAULT 0.000;
+    DECLARE v_sla_breach_rate_pct DECIMAL(10,2) DEFAULT 0.00;
+    DECLARE v_alerts_inserted INT DEFAULT 0;
+
+    SELECT
+        COUNT(*) AS total_requests,
+        COALESCE(ROUND(AVG(is_error) * 100, 2), 0),
+        COALESCE(ROUND(AVG(exec_sec), 3), 0),
+        COALESCE(ROUND(AVG(is_sla_breach) * 100, 2), 0)
+    INTO
+        v_total_requests,
+        v_error_rate_pct,
+        v_avg_execution_time_sec,
+        v_sla_breach_rate_pct
+    FROM vw_system_logs_clean
+    WHERE `timestamp` >= NOW() - INTERVAL 60 MINUTE;
+
+    IF v_total_requests = 0 THEN
+        INSERT INTO alerts (endpoint, metric_name, metric_value, severity)
+        SELECT NULL, 'no_traffic_last_60m', 0, 'INFO'
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM alerts
+            WHERE metric_name = 'no_traffic_last_60m'
+              AND alert_time >= NOW() - INTERVAL 10 MINUTE
+        );
+        SET v_alerts_inserted = v_alerts_inserted + ROW_COUNT();
+    ELSE
+        IF v_error_rate_pct > 5 THEN
+            INSERT INTO alerts (endpoint, metric_name, metric_value, severity)
+            SELECT NULL, 'error_rate_pct', v_error_rate_pct, 'HIGH'
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM alerts
+                WHERE metric_name = 'error_rate_pct'
+                  AND alert_time >= NOW() - INTERVAL 10 MINUTE
+            );
+            SET v_alerts_inserted = v_alerts_inserted + ROW_COUNT();
+        END IF;
+
+        IF v_avg_execution_time_sec > 1 THEN
+            INSERT INTO alerts (endpoint, metric_name, metric_value, severity)
+            SELECT NULL, 'avg_execution_time_sec', v_avg_execution_time_sec, 'HIGH'
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM alerts
+                WHERE metric_name = 'avg_execution_time_sec'
+                  AND alert_time >= NOW() - INTERVAL 10 MINUTE
+            );
+            SET v_alerts_inserted = v_alerts_inserted + ROW_COUNT();
+        END IF;
+
+        IF v_sla_breach_rate_pct > 10 THEN
+            INSERT INTO alerts (endpoint, metric_name, metric_value, severity)
+            SELECT NULL, 'sla_breach_rate_pct', v_sla_breach_rate_pct, 'MEDIUM'
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM alerts
+                WHERE metric_name = 'sla_breach_rate_pct'
+                  AND alert_time >= NOW() - INTERVAL 10 MINUTE
+            );
+            SET v_alerts_inserted = v_alerts_inserted + ROW_COUNT();
+        END IF;
+    END IF;
+
+    SELECT
+        'health_check_completed' AS status,
+        v_total_requests AS total_requests_60m,
+        v_error_rate_pct AS error_rate_pct,
+        v_avg_execution_time_sec AS avg_execution_time_sec,
+        v_sla_breach_rate_pct AS sla_breach_rate_pct,
+        v_alerts_inserted AS alerts_inserted,
+        NOW() AS run_time;
 END $$
 
 DELIMITER ;

@@ -6,6 +6,8 @@ SELECT
     endpoint,
     status,
     `timestamp`,
+    rows_scanned,
+    joins_count,
     DATE(`timestamp`) AS request_date,
     DATE_FORMAT(`timestamp`, '%Y-%m-%d %H:%i:00') AS minute_bucket,
     execution_time / 1000.0 AS exec_sec,

@@ -86,7 +86,7 @@ Cleaned CSV                Rejected CSV
 
 * Modular SQL scripts:
 
-  * Basic metrics
+  * Basic metrics (totals, rates, top endpoints, hourly trends)
   * KPI calculations
   * Advanced performance analysis
 * Optimized using views and structured queries
@@ -99,6 +99,31 @@ Cleaned CSV                Rejected CSV
   * Latency trends
   * Error tracking
   * SLA compliance
+
+### Dashboard Preview
+
+![Power BI Dashboard](dashboard/powerbi_screenshot.png)
+
+Dashboard file location:
+* `dashboard/performance_monitoring.pbix`
+* `dashboard/powerbi_screenshot.png`
+
+### Power BI Snapshot & Report
+
+Use the provided screenshot as the default report preview and keep visuals aligned with SQL output tables.
+
+Recommended report pages:
+1. Executive KPI page: Total Requests, Success Rate, Error Rate, Avg Execution Time, SLA Breach
+2. Traffic page: Requests by hour and by minute
+3. Endpoint page: Top endpoints, slow endpoints, status mix
+4. Diagnostics page: root cause and optimization actions from diagnostics queries
+
+Minimum visuals checklist:
+1. KPI cards: total_requests, success_rate_pct, error_rate_pct, avg_execution_time_sec, sla_breach_rate_pct
+2. Trend chart: daily total requests with error and SLA breach overlays
+3. Distribution chart: status code split (200/404/500)
+4. Table: top slow endpoints with avg and max execution time
+5. Table: endpoint-level recommended_solution from diagnostics
 
 ---
 
@@ -145,7 +170,7 @@ SQL_PROJECT/
 ## 1. Setup Database
 
 ```sql
-source sql/00_schema.sql;
+source sql/00_schema_setup.sql;
 ```
 
 ---
@@ -168,21 +193,222 @@ This will:
 ## 3. Run Analytics
 
 ```text
-1. sql/07_reset.sql (optional)
-2. sql/03_views.sql
-3. sql/01_basic.sql
-4. sql/02_kpi.sql
-5. sql/04_advanced.sql
-6. sql/05_dashboard.sql
+1. sql/07_reset_reload.sql (optional)
+2. sql/03_clean_view.sql
+3. sql/01_basic_analytics.sql
+4. sql/02_kpi_metrics.sql
+5. sql/04_advanced_diagnostics.sql
+6. sql/05_dashboard_feeds.sql
+7. sql/06_diagnostics.sql
 ```
 
-Or run all:
+Run each file directly using `SOURCE` in MySQL CLI.
+
+Procedure note:
+1. `sp_archive_old_system_logs` and `sp_system_health_check` are defined in `sql/00_schema_setup.sql`.
+2. `sql/06_diagnostics.sql` runs diagnostics queries and executes `CALL sp_system_health_check();`.
+
+---
+
+# 🧮 Query Summary
+
+Current analytics query counts:
+
+| SQL File | Query Count | Purpose |
+| -------- | ----------- | ------- |
+| `sql/01_basic_analytics.sql` | 10 | Simple checks, hourly trend, top endpoints, status distribution |
+| `sql/02_kpi_metrics.sql` | 6 | KPI, ETL quality, and health score |
+| `sql/04_advanced_diagnostics.sql` | 5 | Advanced analytics (latency buckets, trends, endpoint risk) |
+| `sql/05_dashboard_feeds.sql` | 6 | Final dashboard feeds + slow endpoints + status + DB load |
+| `sql/06_diagnostics.sql` | 14 | Root cause analysis, impact levels, fixes, and health diagnostics |
+
+**Total analytics queries: 41**
+
+Final object count summary:
+
+| Basic Queries | Intermediate Queries | Advanced Queries | Stored Procedures | Triggers | Total Analytics Queries | Total Automation Objects | Grand Total |
+| ------------- | -------------------- | ---------------- | ----------------- | -------- | ---------------------- | ------------------------ | ----------- |
+| 10 | 12 | 19 | 2 | 0 | 41 | 2 | 43 |
+
+Count rules used:
+1. Basic queries: `sql/01_basic_analytics.sql` -> 10
+2. Intermediate queries: `sql/02_kpi_metrics.sql` + `sql/05_dashboard_feeds.sql` -> 12
+3. Advanced queries: `sql/04_advanced_diagnostics.sql` + `sql/06_diagnostics.sql` -> 19
+4. Stored procedures: `sp_archive_old_system_logs`, `sp_system_health_check` -> 2
+5. Triggers: none defined -> 0
+
+Basic layer includes:
+
+1. Total requests
+2. Success rate
+3. Error rate
+4. Not-found rate
+5. Average latency
+6. Total error requests
+7. Top endpoints by traffic
+8. Top slow endpoints
+9. Hourly traffic with error rate
+10. Status distribution
+
+Advanced layer includes:
+
+1. Latency bucket distribution
+2. Daily latency + error trend
+3. Endpoint summary
+4. Endpoint risk score
+5. Peak traffic hours
+
+Diagnostics layer includes:
+
+1. System-level problem and fix summary
+2. Endpoint-level impact and action matrix
+3. Hour-level bottleneck diagnosis
+4. Query complexity diagnosis (rows scanned / joins)
+5. Rejection reason to action map
+6. Slow query evidence
+7. High-load and join-heavy evidence
+8. Alert severity classification
+9. Root-cause analysis with recommended fixes
+10. ETL delay diagnostics and daily diagnostics trend
+
+Procedure flow:
+1. Procedure creation happens in `sql/00_schema_setup.sql`.
+2. Procedure execution happens in `sql/06_diagnostics.sql`.
+
+---
+
+# ✅ Validation Checks (PASS/FAIL SQL)
+
+Run these checks after data load and before dashboard refresh.
 
 ```sql
-source sql/06_run.sql;
+USE performance_monitoring;
+
+-- 1) Base data exists
+SELECT
+  'system_logs_has_data' AS check_name,
+  CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END AS status,
+  COUNT(*) AS observed_value
+FROM system_logs;
+
+-- 2) View is queryable
+SELECT
+  'vw_system_logs_clean_has_data' AS check_name,
+  CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END AS status,
+  COUNT(*) AS observed_value
+FROM vw_system_logs_clean;
+
+-- 3) Status codes are valid
+SELECT
+  'status_codes_valid' AS check_name,
+  CASE WHEN SUM(CASE WHEN status NOT IN (200, 404, 500) THEN 1 ELSE 0 END) = 0 THEN 'PASS' ELSE 'FAIL' END AS status,
+  SUM(CASE WHEN status NOT IN (200, 404, 500) THEN 1 ELSE 0 END) AS invalid_rows
+FROM system_logs;
+
+-- 4) Execution time is positive
+SELECT
+  'execution_time_positive' AS check_name,
+  CASE WHEN SUM(CASE WHEN execution_time <= 0 THEN 1 ELSE 0 END) = 0 THEN 'PASS' ELSE 'FAIL' END AS status,
+  SUM(CASE WHEN execution_time <= 0 THEN 1 ELSE 0 END) AS invalid_rows
+FROM system_logs;
+
+-- 5) Endpoint is not blank
+SELECT
+  'endpoint_not_blank' AS check_name,
+  CASE WHEN SUM(CASE WHEN endpoint IS NULL OR TRIM(endpoint) = '' THEN 1 ELSE 0 END) = 0 THEN 'PASS' ELSE 'FAIL' END AS status,
+  SUM(CASE WHEN endpoint IS NULL OR TRIM(endpoint) = '' THEN 1 ELSE 0 END) AS invalid_rows
+FROM system_logs;
+
+-- 6) ETL metrics available
+SELECT
+  'etl_metrics_present' AS check_name,
+  CASE WHEN COUNT(*) > 0 THEN 'PASS' ELSE 'FAIL' END AS status,
+  COUNT(*) AS observed_value
+FROM etl_metrics;
+
+-- 7) Stored procedures exist
+SELECT
+  'stored_procedures_present' AS check_name,
+  CASE WHEN COUNT(*) = 2 THEN 'PASS' ELSE 'FAIL' END AS status,
+  COUNT(*) AS observed_value
+FROM information_schema.routines
+WHERE routine_schema = 'performance_monitoring'
+  AND routine_type = 'PROCEDURE'
+  AND routine_name IN ('sp_archive_old_system_logs', 'sp_system_health_check');
+
+-- 8) Triggers count (expected 0)
+SELECT
+  'triggers_expected_zero' AS check_name,
+  CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END AS status,
+  COUNT(*) AS observed_value
+FROM information_schema.triggers
+WHERE trigger_schema = 'performance_monitoring';
 ```
 
-⚠️ `SOURCE` works only in MySQL CLI
+---
+
+# 📉 Performance Notes (From Advanced Diagnostics)
+
+These notes are directly mapped to outputs from `sql/04_advanced_diagnostics.sql` and `sql/06_diagnostics.sql`.
+
+| Diagnostic Output | What It Indicates | Typical Threshold | Recommended Action |
+| ----------------- | ----------------- | ----------------- | ------------------ |
+| Latency bucket distribution | Overall speed profile | Slow bucket share increasing | Prioritize slow endpoints first |
+| Endpoint risk score | Combined risk from latency/error/SLA breach | Risk score trends up over time | Tune query plan and add endpoint-level caching |
+| Alert severity classification | Request severity mix | HIGH share > 0 sustained | Immediate query and index review |
+| Query-complexity diagnostics | Scan/join pressure | rows_scanned >= 5000 or joins_count >= 5 | Add selective indexes, reduce joins |
+| Root-cause analysis by endpoint | Problem + cause + fix | Endpoint avg_execution_time_sec > 5 | Rewrite expensive SQL and optimize endpoint logic |
+| ETL delay diagnostics | Data freshness risk | etl_delay_minutes > 60 | Check scheduler/backlog and restart ingestion job |
+
+Use these notes as your weekly review template before publishing dashboard updates.
+
+---
+
+# ✅ Coverage Confirmation
+
+The following are present in this project:
+
+Basic:
+1. Total requests
+2. Avg execution time
+3. Error count
+
+Intermediate:
+1. Requests by hour
+2. Status distribution
+3. Top endpoints
+
+Advanced:
+1. Slow queries
+2. High load queries
+3. Join-heavy queries
+
+Step 6 - Alert system (monitoring logic):
+1. HIGH -> execution_time > 5 sec
+2. MEDIUM -> execution_time between 3 and 5 sec
+3. NORMAL -> execution_time < 3 sec
+
+Step 7 - Root cause analysis:
+1. Problem
+2. Cause
+3. Impact level
+
+Step 8 - Optimization engine:
+1. Add index -> if rows_scanned is high
+2. Reduce joins -> if joins_count is high
+3. Rewrite query -> if execution_time is high
+
+Step 9 - Power BI outputs:
+Charts:
+1. Requests over time
+2. Status codes
+3. Slow endpoints
+4. DB load
+
+KPIs:
+1. Total requests
+2. Avg execution time
+3. Errors
 
 ---
 
@@ -235,7 +461,7 @@ avg_latency_sec: 0.482
 
 # ⚠️ Important Notes
 
-* Stop simulator before reset (`sql/07_reset.sql`)
+* Stop simulator before reset (`sql/07_reset_reload.sql`)
 * CSV headers are auto-managed
 * Queries are modular and reusable
 
