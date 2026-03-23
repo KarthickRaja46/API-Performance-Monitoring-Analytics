@@ -114,7 +114,6 @@ SQL_PROJECT/
 ├── sql/                      # Schema, analytics, automation
 ├── scripts/                  # Python ETL + simulator
 ├── dashboard/                # Power BI files
-├── docs/                     # Documentation & prep
 ```
 
 ---
@@ -169,11 +168,12 @@ This will:
 ## 3. Run Analytics
 
 ```text
-1. sql/03_views.sql
-2. sql/01_basic.sql
-3. sql/02_kpi.sql
-4. sql/04_advanced.sql
-5. sql/05_dashboard.sql
+1. sql/07_reset.sql (optional)
+2. sql/03_views.sql
+3. sql/01_basic.sql
+4. sql/02_kpi.sql
+5. sql/04_advanced.sql
+6. sql/05_dashboard.sql
 ```
 
 Or run all:
