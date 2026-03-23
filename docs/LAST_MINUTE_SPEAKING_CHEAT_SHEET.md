@@ -6,11 +6,11 @@ It simulates live logs, validates data quality, stores clean and rejected record
 Goal: monitor reliability, latency, SLA compliance, and ETL quality in one workflow.
 
 ## 2) Speak This Flow (Core Story)
-1. Generate logs in Log_simulator.py.
-2. Save all raw records to data/log.csv.
+1. Generate logs in scripts/log_simulator.py.
+2. Save all raw records to data/raw/log.csv.
 3. Validate each record (status, execution_time, rows_scanned).
-4. Send valid rows to system_logs and cleaned_logs.csv.
-5. Send invalid rows to rejected_logs and rejected_logs.csv with reason.
+4. Send valid rows to system_logs and data/processed/cleaned_logs.csv.
+5. Send invalid rows to rejected_logs and data/processed/rejected_logs.csv with reason.
 6. Update etl_metrics (total, inserted, rejected, load_time).
 7. Run SQL analytics and show Power BI results.
 

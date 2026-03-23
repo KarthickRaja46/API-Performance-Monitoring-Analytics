@@ -28,9 +28,9 @@ CREATE TABLE system_logs (
 );
 
 -- Indexes for system_logs
-CREATE INDEX idx_logs_timestamp ON system_logs(`timestamp`);
-CREATE INDEX idx_logs_endpoint ON system_logs(endpoint);
-CREATE INDEX idx_logs_status ON system_logs(status);
+CREATE INDEX idx_timestamp ON system_logs(`timestamp`);
+CREATE INDEX idx_endpoint ON system_logs(endpoint);
+CREATE INDEX idx_status ON system_logs(status);
 CREATE INDEX idx_logs_etl_run ON system_logs(etl_run_id);
 CREATE INDEX idx_logs_endpoint_timestamp ON system_logs(endpoint, `timestamp`);
 

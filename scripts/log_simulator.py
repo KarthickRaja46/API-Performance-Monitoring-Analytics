@@ -68,12 +68,14 @@ conn = get_connection()
 cursor = conn.cursor()
 
 
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
+RAW_DIR = os.path.join("data", "raw")
+PROCESSED_DIR = os.path.join("data", "processed")
+os.makedirs(RAW_DIR, exist_ok=True)
+os.makedirs(PROCESSED_DIR, exist_ok=True)
 
-raw_csv = os.path.join(DATA_DIR, "log.csv")
-cleaned_csv = os.path.join(DATA_DIR, "cleaned_logs.csv")
-rejected_csv = os.path.join(DATA_DIR, "rejected_logs.csv")
+raw_csv = os.path.join(RAW_DIR, "log.csv")
+cleaned_csv = os.path.join(PROCESSED_DIR, "cleaned_logs.csv")
+rejected_csv = os.path.join(PROCESSED_DIR, "rejected_logs.csv")
 
 # =============================================================================
 # 4. HEADERS
