@@ -211,7 +211,6 @@ SQL_PROJECT/
 **Karthick Raja**
 -
 Data Analyst specializing in SQL, ETL pipelines, and performance analytics
--
 ---
 
 ## ⭐ Final Takeaway
