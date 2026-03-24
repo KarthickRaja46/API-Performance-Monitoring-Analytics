@@ -1,4 +1,5 @@
 USE performance_monitoring;
+
 -- Summary KPI block 
 SELECT
     COUNT(*) AS total_requests,
@@ -14,6 +15,7 @@ SELECT
         ((1 - AVG(is_sla_breach)) * 20),
     2) AS health_score_pct
 FROM vw_system_logs_clean;
+
 -- Daily trend for charts
 SELECT
     request_date,
@@ -24,6 +26,7 @@ SELECT
 FROM vw_system_logs_clean
 GROUP BY request_date
 ORDER BY request_date;
+
 -- Top endpoints table
 SELECT
     endpoint,
@@ -36,7 +39,8 @@ FROM vw_system_logs_clean
 GROUP BY endpoint
 ORDER BY total_requests DESC, avg_execution_time_sec DESC
 LIMIT 10;
--- Slow endpoints table (for slow endpoint chart)
+
+-- Slow endpoints table 
 SELECT
     endpoint,
     COUNT(*) AS total_requests,
@@ -49,7 +53,8 @@ GROUP BY endpoint
 HAVING COUNT(*) >= 10
 ORDER BY avg_execution_time_sec DESC, total_requests DESC
 LIMIT 10;
--- Status code distribution (for status chart)
+
+-- Status code distribution 
 SELECT
     status,
     COUNT(*) AS total_requests,
@@ -57,7 +62,8 @@ SELECT
 FROM vw_system_logs_clean
 GROUP BY status
 ORDER BY total_requests DESC;
--- DB load view by hour (traffic + scan + join pressure)
+
+-- DB load view by hour
 SELECT
     HOUR(`timestamp`) AS hour_of_day,
     COUNT(*) AS total_requests,

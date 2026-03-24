@@ -1,13 +1,18 @@
+
 USE performance_monitoring;
--- Success rate
+
+-/*- Success rate
 SELECT ROUND(AVG(is_success) * 100, 2) AS success_rate_pct
-FROM vw_system_logs_clean;
--- Error rate
+FROM vw_system_logs_clean;--*/
+
+/*-- Error rate
 SELECT ROUND(AVG(is_error) * 100, 2) AS error_rate_pct
-FROM vw_system_logs_clean;
+FROM vw_system_logs_clean;  --*/
+
 -- SLA breach rate
 SELECT ROUND(AVG(is_sla_breach) * 100, 2) AS sla_breach_rate_pct
 FROM vw_system_logs_clean;
+
 -- ETL inserted vs rejected share
 SELECT
     run_id,
@@ -20,11 +25,13 @@ SELECT
     load_time
 FROM etl_metrics
 ORDER BY load_time DESC;
+
 -- ETL freshness (minutes)
 SELECT ROUND(
     TIMESTAMPDIFF(SECOND, MAX(load_time), NOW()) / 60.0,
 2) AS minutes_since_last_load
 FROM etl_metrics;
+
 -- Overall health score
 SELECT
     COUNT(*) AS total_requests,

@@ -1,5 +1,6 @@
 CREATE DATABASE performance_monitoring;
 USE performance_monitoring;
+
 -- SYSTEM LOGS TABLE
 CREATE TABLE system_logs (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -26,6 +27,7 @@ CREATE INDEX idx_endpoint ON system_logs(endpoint);
 CREATE INDEX idx_status ON system_logs(status);
 CREATE INDEX idx_logs_etl_run ON system_logs(etl_run_id);
 CREATE INDEX idx_logs_endpoint_timestamp ON system_logs(endpoint, `timestamp`);
+
 -- ETL METRICS TABLE
 CREATE TABLE etl_metrics (
     run_id VARCHAR(36) NOT NULL,
@@ -45,6 +47,7 @@ CREATE TABLE etl_metrics (
 );
 
 CREATE INDEX idx_etl_load_time ON etl_metrics(load_time);
+
 -- REJECTED LOGS TABLE
 CREATE TABLE rejected_logs (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -63,6 +66,7 @@ CREATE TABLE rejected_logs (
 
 CREATE INDEX idx_rejected_reason ON rejected_logs(reason);
 CREATE INDEX idx_rejected_etl_run ON rejected_logs(etl_run_id);
+
 -- ARCHIVE TABLE
 CREATE TABLE system_logs_archive (
     id BIGINT UNSIGNED NOT NULL,
@@ -81,6 +85,7 @@ CREATE TABLE system_logs_archive (
 );
 
 CREATE INDEX idx_archive_timestamp ON system_logs_archive(`timestamp`);
+
 -- ALERT CONFIG TABLE
 CREATE TABLE alert_threshold_config (
     config_id INT AUTO_INCREMENT PRIMARY KEY,

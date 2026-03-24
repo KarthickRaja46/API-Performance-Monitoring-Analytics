@@ -1,8 +1,5 @@
 USE performance_monitoring;
 
--- =============================================================================
--- ADVANCED ANALYTICS (INTERMEDIATE LEVEL)
--- =============================================================================
 -- Latency buckets 
 SELECT
     CASE
@@ -25,6 +22,7 @@ SELECT
 FROM vw_system_logs_clean
 GROUP BY request_date
 ORDER BY request_date;
+
 -- Endpoint summary 
 SELECT
     endpoint,
@@ -38,7 +36,7 @@ GROUP BY endpoint
 HAVING COUNT(*) >= 10
 ORDER BY total_requests DESC, avg_execution_time_sec DESC;
 
--- Simple endpoint risk score 
+-- Simple endpoint risk score (rank-them)
 SELECT
     endpoint,
     COUNT(*) AS total_requests,
