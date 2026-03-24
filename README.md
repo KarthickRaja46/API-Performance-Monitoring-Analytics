@@ -3,6 +3,7 @@
 **Real-world ETL + SQL analytics system to monitor database performance, detect SLA breaches, and optimize system health.**  
 
 📌 Built to simulate real-world production monitoring systems used in backend and API environments 
+---
 📌 Focus: Data quality • Performance analytics • System reliability  
 
 ---
